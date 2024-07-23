@@ -8,7 +8,7 @@ const job = new CronJob('0 9,12,14,19,21,0 * * *', checkForNewNotices);
 bot.launch();
 job.start();
 
-logger.info('Bot started');
+logger.info('logger outside job');
 
 // Enable graceful stop
 process.once('SIGINT', () => {

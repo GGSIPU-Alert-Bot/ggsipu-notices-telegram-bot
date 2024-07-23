@@ -1,0 +1,27 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Notice {
+  id        Int      @id @default(autoincrement())
+  date      String
+  title     String
+  url       String
+  createdAt DateTime @default(now())
+
+  @@unique([title, url])
+}
+
+model LastCheckInfo {
+  id            Int      @id @default(autoincrement())
+  lastNoticeId  Int
+  lastDate      String
+  lastCreatedAt String
+  lastTitle     String
+  lastUrl       String
+}

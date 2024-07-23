@@ -8,30 +8,59 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getLastCheckInfo = getLastCheckInfo;
 exports.saveLastCheckInfo = saveLastCheckInfo;
-const promises_1 = __importDefault(require("fs/promises"));
+const client_1 = require("@prisma/client");
 const logger_1 = require("../utils/logger");
-const LAST_CHECK_FILE = 'last_check_info.json';
+const prisma = new client_1.PrismaClient();
 function getLastCheckInfo() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const data = yield promises_1.default.readFile(LAST_CHECK_FILE, 'utf-8');
-            return JSON.parse(data);
+            const lastCheck = yield prisma.lastCheckInfo.findFirst({
+                orderBy: { id: 'desc' }
+            });
+            if (lastCheck) {
+                return {
+                    lastNoticeId: lastCheck.lastNoticeId,
+                    lastDate: lastCheck.lastDate,
+                    lastCreatedAt: lastCheck.lastCreatedAt,
+                    lastTitle: lastCheck.lastTitle,
+                    lastUrl: lastCheck.lastUrl
+                };
+            }
+            else {
+                logger_1.logger.warn('Last check info not found, using default values');
+                return {
+                    lastNoticeId: 1,
+                    lastDate: '2024-07-22',
+                    lastCreatedAt: '2024-07-23 00:24:15.434',
+                    lastTitle: 'Notice regarding Ph.D. Admission Interview (International Students) for USICT',
+                    lastUrl: 'http://www.ipu.ac.in/Pubinfo2024/nt220724p431%20(11).pdf'
+                };
+            }
         }
         catch (error) {
-            logger_1.logger.warn('Last check info not found, using default values');
-            return { lastNoticeId: 1152527, lastDate: '2024-07-20', lastCreatedAt: '2024-07-21T13:25:03.223Z' };
+            logger_1.logger.error('Error retrieving last check info:', error);
+            throw error;
         }
     });
 }
 function saveLastCheckInfo(info) {
     return __awaiter(this, void 0, void 0, function* () {
-        yield promises_1.default.writeFile(LAST_CHECK_FILE, JSON.stringify(info));
-        logger_1.logger.info('Last check info updated');
+        try {
+            yield prisma.lastCheckInfo.create({
+                data: info
+            });
+            logger_1.logger.info('Last check info updated');
+        }
+        catch (error) {
+            logger_1.logger.error('Error saving last check info:', error);
+            throw error;
+        }
     });
 }
+// Don't forget to close the Prisma client when your app shuts down
+process.on('beforeExit', () => __awaiter(void 0, void 0, void 0, function* () {
+    yield prisma.$disconnect();
+}));
