@@ -31,17 +31,30 @@ export async function checkForNewNotices(): Promise<void> {
 
     if (newNotices.length > 0) {
       logger.info(`Found ${newNotices.length} new notices`);
-      for (const notice of newNotices.reverse()) {
+      
+      // Sort new notices by date (descending) and then by ID (descending)
+      const sortedNewNotices = newNotices.sort((a, b) => {
+        const dateComparison = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateComparison !== 0) return dateComparison;
+        return b.id - a.id;
+      });
+
+      for (const notice of sortedNewNotices.reverse()) {
         await sendNoticeMessage(notice);
       }
 
-      const updatedLastCheckInfo = {
-        lastNoticeId: Math.max(...notices.map(notice => notice.id)),
-        lastDate: notices[0].date,
-        lastCreatedAt: notices[0].createdAt,
-        lastTitle: notices[0].title,
-        lastUrl: notices[0].url
+      const latestNotice = sortedNewNotices[sortedNewNotices.length - 1]; // This should be the most recent notice
+
+      const updatedLastCheckInfo: LastCheckInfo = {
+        lastNoticeId: latestNotice.id,
+        lastDate: latestNotice.date,
+        lastCreatedAt: new Date().toISOString(),
+        lastTitle: latestNotice.title,
+        lastUrl: latestNotice.url,
+        lastProcessedIdForDate: latestNotice.id
       };
+
+      logger.info(`Saving last check info: ${JSON.stringify(updatedLastCheckInfo)}`);
       await saveLastCheckInfo(updatedLastCheckInfo);
     } else {
       logger.info('No new notices found');
@@ -54,28 +67,17 @@ export async function checkForNewNotices(): Promise<void> {
 function isNewNotice(notice: Notice, lastCheckInfo: LastCheckInfo): boolean {
   const noticeDate = new Date(notice.date);
   const lastCheckDate = new Date(lastCheckInfo.lastDate);
-  const noticeCreatedAt = new Date(notice.createdAt);
-  const lastCheckCreatedAt = new Date(lastCheckInfo.lastCreatedAt);
 
-  // If the notice date is newer, it's definitely a new notice
   if (noticeDate > lastCheckDate) {
     return true;
   }
 
-  // If the dates are the same, check the createdAt timestamp
   if (noticeDate.getTime() === lastCheckDate.getTime()) {
-    if (noticeCreatedAt > lastCheckCreatedAt) {
-      return true;
-    }
-
-    // If createdAt is also the same, compare title and URL
-    if (noticeCreatedAt.getTime() === lastCheckCreatedAt.getTime()) {
-      return notice.title !== lastCheckInfo.lastTitle || notice.url !== lastCheckInfo.lastUrl;
-    }
+    return notice.id > lastCheckInfo.lastProcessedIdForDate;
   }
-
-  return false;
-}
+  
+    return false;
+  }
 
 async function sendNoticeMessage(notice: Notice): Promise<void> {
   const caption = formatNoticeCaption(notice);

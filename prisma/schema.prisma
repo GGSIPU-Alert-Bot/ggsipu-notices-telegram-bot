@@ -18,10 +18,12 @@ model Notice {
 }
 
 model LastCheckInfo {
-  id            Int      @id @default(autoincrement())
-  lastNoticeId  Int
-  lastDate      String
-  lastCreatedAt String
-  lastTitle     String
-  lastUrl       String
+  id                     Int      @id @default(autoincrement())
+  lastDate               String
+  createdAt              DateTime @default(now())
+  lastProcessedIdForDate Int
+  lastCreatedAt          String
+  lastNoticeId           Int
+  lastTitle              String
+  lastUrl                String
 }
