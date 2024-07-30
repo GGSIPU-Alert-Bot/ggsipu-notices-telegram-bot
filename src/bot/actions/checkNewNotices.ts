@@ -6,7 +6,7 @@ import { Notice } from '../../models/Notice';
 import { logger } from '../../utils/logger';
 import axios from 'axios';
 import { Readable } from 'stream';
-import { sendWebhookEvent } from '../../services/whatsappWebhookService';
+// import { sendWebhookEvent } from '../../services/whatsappWebhookService';
 
 
 async function downloadPdf(url: string): Promise<Buffer> {
@@ -43,7 +43,7 @@ export async function checkForNewNotices(): Promise<void> {
 
       for (const notice of sortedNewNotices.reverse()) {
         await sendNoticeMessage(notice);
-        await sendWebhookEvent(notice); 
+        // await sendWebhookEvent(notice); 
       }
 
       const latestNotice = sortedNewNotices[sortedNewNotices.length - 1]; // This should be the most recent notice
