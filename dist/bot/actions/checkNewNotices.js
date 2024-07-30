@@ -20,6 +20,7 @@ const storageService_1 = require("../../services/storageService");
 const logger_1 = require("../../utils/logger");
 const axios_1 = __importDefault(require("axios"));
 const stream_1 = require("stream");
+const whatsappWebhookService_1 = require("../../services/whatsappWebhookService");
 function downloadPdf(url) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -54,6 +55,7 @@ function checkForNewNotices() {
                 });
                 for (const notice of sortedNewNotices.reverse()) {
                     yield sendNoticeMessage(notice);
+                    yield (0, whatsappWebhookService_1.sendWebhookEvent)(notice);
                 }
                 const latestNotice = sortedNewNotices[sortedNewNotices.length - 1]; // This should be the most recent notice
                 const updatedLastCheckInfo = {

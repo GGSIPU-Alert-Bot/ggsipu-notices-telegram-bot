@@ -30,12 +30,12 @@ export async function getLastCheckInfo(): Promise<LastCheckInfo> {
     } else {
       logger.warn('Last check info not found, using default values');
       return {
-        lastNoticeId: 37057,
-        lastDate: '2024-07-23',
-        lastCreatedAt: '2024-07-23T13:00:14.889Z',
-        lastTitle: 'List of selected candidates, Ph.D. Admission in USMS (Management) PET Code 221, Academic Session 2024-25',
-        lastUrl: 'http://www.ipu.ac.in/Pubinfo2024/nt230724450p%20(1).pdf',
-        lastProcessedIdForDate: 37057
+        lastNoticeId: 483333,
+        lastDate: '2024-07-29',
+        lastCreatedAt: '2024-07-30T11:39:04.234Z',
+        lastTitle: 'Inviting applications / nomination for the national awards for empowerment of persons with disabilities 2024-25',
+        lastUrl: 'http://www.ipu.ac.in/Pubinfo2024/nt290724431p%20(1).pdf',
+        lastProcessedIdForDate: 483333
       };
     }
   } catch (error) {
