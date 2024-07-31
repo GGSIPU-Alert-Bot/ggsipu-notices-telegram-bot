@@ -6,21 +6,27 @@ import { Notice } from '../../models/Notice';
 import { logger } from '../../utils/logger';
 import axios from 'axios';
 import { InputFile } from 'telegraf/typings/core/types/typegram';
-// import { sendWebhookEvent } from '../../services/whatsappWebhookService';
+import { retry } from 'ts-retry-promise';
 
+// Custom sleep function
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function downloadPdf(url: string): Promise<Buffer> {
-  try {
+// Set global axios timeout
+axios.defaults.timeout = 60000; // 60 seconds
+
+async function downloadPdfWithRetry(url: string): Promise<Buffer> {
+  return retry(async () => {
     const response = await axios({
       method: 'get',
       url: url,
       responseType: 'arraybuffer'
     });
-    return Buffer.from(response.data, 'binary');
-  } catch (error) {
-    logger.error(`Error downloading PDF from ${url}:`, error);
-    throw new Error('Failed to download PDF');
-  }
+    const pdfBuffer = Buffer.from(response.data, 'binary');
+    if (pdfBuffer.length > 50 * 1024 * 1024) { // If larger than 50MB
+      throw new Error('PDF too large to send directly');
+    }
+    return pdfBuffer;
+  }, { retries: 3, delay: 1000 });
 }
 
 export async function checkForNewNotices(): Promise<void> {
@@ -34,7 +40,6 @@ export async function checkForNewNotices(): Promise<void> {
     if (newNotices.length > 0) {
       logger.info(`Found ${newNotices.length} new notices`);
       
-      // Sort new notices by date (descending) and then by ID (descending)
       const sortedNewNotices = newNotices.sort((a, b) => {
         const dateComparison = new Date(b.date).getTime() - new Date(a.date).getTime();
         if (dateComparison !== 0) return dateComparison;
@@ -42,11 +47,15 @@ export async function checkForNewNotices(): Promise<void> {
       });
 
       for (const notice of sortedNewNotices.reverse()) {
-        await sendNoticeMessage(notice);
-        // await sendWebhookEvent(notice); 
+        try {
+          await sendNoticeMessage(notice);
+          await sleep(1000); // Wait 1 second between sends for rate limiting
+        } catch (error) {
+          logger.error(`Failed to send notice ${notice.id}:`, error);
+        }
       }
 
-      const latestNotice = sortedNewNotices[sortedNewNotices.length - 1]; // This should be the most recent notice
+      const latestNotice = sortedNewNotices[sortedNewNotices.length - 1];
 
       const updatedLastCheckInfo: LastCheckInfo = {
         lastNoticeId: latestNotice.id,
@@ -79,20 +88,22 @@ function isNewNotice(notice: Notice, lastCheckInfo: LastCheckInfo): boolean {
     return notice.id > lastCheckInfo.lastProcessedIdForDate;
   }
   
-    return false;
-  }
+  return false;
+}
 
-  async function sendNoticeMessage(notice: Notice): Promise<void> {
-    const caption = formatNoticeCaption(notice);
-    try {
-      const pdfBuffer = await downloadPdf(notice.url);
-      const filename = `Notice_${notice.id}.pdf`;
-  
-      const documentInput: InputFile = {
-        source: pdfBuffer,
-        filename: filename
-      };
-  
+async function sendNoticeMessage(notice: Notice): Promise<void> {
+  const caption = formatNoticeCaption(notice);
+  const start = Date.now();
+  try {
+    const pdfBuffer = await downloadPdfWithRetry(notice.url);
+    const filename = `Notice_${notice.id}.pdf`;
+
+    const documentInput: InputFile = {
+      source: pdfBuffer,
+      filename: filename
+    };
+
+    await retry(async () => {
       await bot.telegram.sendDocument(
         config.channelId, 
         documentInput,
@@ -101,11 +112,15 @@ function isNewNotice(notice: Notice, lastCheckInfo: LastCheckInfo): boolean {
           parse_mode: 'HTML'
         }
       );
-      logger.info(`Sent notice: ${notice.id}`);
-    } catch (error) {
-      logger.error(`Error sending notice ${notice.id}:`, error);
-    }
+    }, { retries: 3, delay: 1000 });
+
+    logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
+  } catch (error) {
+    logger.error(`Error sending notice ${notice.id}. Time taken: ${Date.now() - start}ms:`, error);
+    throw error; // Re-throw the error to be caught in the main loop
   }
+}
+
 function formatNoticeCaption(notice: Notice): string {
   return `
 📢 <b>New Notice</b>

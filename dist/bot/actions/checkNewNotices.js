@@ -19,21 +19,25 @@ const apiService_1 = require("../../services/apiService");
 const storageService_1 = require("../../services/storageService");
 const logger_1 = require("../../utils/logger");
 const axios_1 = __importDefault(require("axios"));
-// import { sendWebhookEvent } from '../../services/whatsappWebhookService';
-function downloadPdf(url) {
+const ts_retry_promise_1 = require("ts-retry-promise");
+// Custom sleep function
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// Set global axios timeout
+axios_1.default.defaults.timeout = 60000; // 60 seconds
+function downloadPdfWithRetry(url) {
     return __awaiter(this, void 0, void 0, function* () {
-        try {
+        return (0, ts_retry_promise_1.retry)(() => __awaiter(this, void 0, void 0, function* () {
             const response = yield (0, axios_1.default)({
                 method: 'get',
                 url: url,
                 responseType: 'arraybuffer'
             });
-            return Buffer.from(response.data, 'binary');
-        }
-        catch (error) {
-            logger_1.logger.error(`Error downloading PDF from ${url}:`, error);
-            throw new Error('Failed to download PDF');
-        }
+            const pdfBuffer = Buffer.from(response.data, 'binary');
+            if (pdfBuffer.length > 50 * 1024 * 1024) { // If larger than 50MB
+                throw new Error('PDF too large to send directly');
+            }
+            return pdfBuffer;
+        }), { retries: 3, delay: 1000 });
     });
 }
 function checkForNewNotices() {
@@ -45,7 +49,6 @@ function checkForNewNotices() {
             const newNotices = notices.filter(notice => isNewNotice(notice, lastCheckInfo));
             if (newNotices.length > 0) {
                 logger_1.logger.info(`Found ${newNotices.length} new notices`);
-                // Sort new notices by date (descending) and then by ID (descending)
                 const sortedNewNotices = newNotices.sort((a, b) => {
                     const dateComparison = new Date(b.date).getTime() - new Date(a.date).getTime();
                     if (dateComparison !== 0)
@@ -53,10 +56,15 @@ function checkForNewNotices() {
                     return b.id - a.id;
                 });
                 for (const notice of sortedNewNotices.reverse()) {
-                    yield sendNoticeMessage(notice);
-                    // await sendWebhookEvent(notice); 
+                    try {
+                        yield sendNoticeMessage(notice);
+                        yield sleep(1000); // Wait 1 second between sends for rate limiting
+                    }
+                    catch (error) {
+                        logger_1.logger.error(`Failed to send notice ${notice.id}:`, error);
+                    }
                 }
-                const latestNotice = sortedNewNotices[sortedNewNotices.length - 1]; // This should be the most recent notice
+                const latestNotice = sortedNewNotices[sortedNewNotices.length - 1];
                 const updatedLastCheckInfo = {
                     lastNoticeId: latestNotice.id,
                     lastDate: latestNotice.date,
@@ -91,21 +99,25 @@ function isNewNotice(notice, lastCheckInfo) {
 function sendNoticeMessage(notice) {
     return __awaiter(this, void 0, void 0, function* () {
         const caption = formatNoticeCaption(notice);
+        const start = Date.now();
         try {
-            const pdfBuffer = yield downloadPdf(notice.url);
+            const pdfBuffer = yield downloadPdfWithRetry(notice.url);
             const filename = `Notice_${notice.id}.pdf`;
             const documentInput = {
                 source: pdfBuffer,
                 filename: filename
             };
-            yield index_1.bot.telegram.sendDocument(config_1.config.channelId, documentInput, {
-                caption: caption,
-                parse_mode: 'HTML'
-            });
-            logger_1.logger.info(`Sent notice: ${notice.id}`);
+            yield (0, ts_retry_promise_1.retry)(() => __awaiter(this, void 0, void 0, function* () {
+                yield index_1.bot.telegram.sendDocument(config_1.config.channelId, documentInput, {
+                    caption: caption,
+                    parse_mode: 'HTML'
+                });
+            }), { retries: 3, delay: 1000 });
+            logger_1.logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
         }
         catch (error) {
-            logger_1.logger.error(`Error sending notice ${notice.id}:`, error);
+            logger_1.logger.error(`Error sending notice ${notice.id}. Time taken: ${Date.now() - start}ms:`, error);
+            throw error; // Re-throw the error to be caught in the main loop
         }
     });
 }
