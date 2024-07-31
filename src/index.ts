@@ -13,7 +13,7 @@ app.get('/status', (req: any, res: { json: (arg0: { message: string; }) => void;
 });
 
 // Setting up the cron job
-const job = new CronJob('10 8,10,12,14,16,17,18,19,20 * * *', checkForNewNotices);
+const job = new CronJob('10 8,10,12,14,16,17,18,19,20,22 * * *', checkForNewNotices);
 
 // Launch the bot and start the cron job
 bot.launch();

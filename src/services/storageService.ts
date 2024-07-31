@@ -30,12 +30,12 @@ export async function getLastCheckInfo(): Promise<LastCheckInfo> {
     } else {
       logger.warn('Last check info not found, using default values');
       return {
-        lastNoticeId: 483333,
-        lastDate: '2024-07-29',
-        lastCreatedAt: '2024-07-30T11:39:04.234Z',
-        lastTitle: 'Inviting applications / nomination for the national awards for empowerment of persons with disabilities 2024-25',
-        lastUrl: 'http://www.ipu.ac.in/Pubinfo2024/nt290724431p%20(1).pdf',
-        lastProcessedIdForDate: 483333
+        lastNoticeId: 557908,
+        lastDate: '2024-07-30',
+        lastCreatedAt: '2024-07-31T04:56:11.750Z',
+        lastTitle: 'Schedule 1st Counselling/Admission for B.Sc. (Environment Science) CET Code 135',
+        lastUrl: 'http://www.ipu.ac.in/Pubinfo2024/nt300724531%20(1).pdf',
+        lastProcessedIdForDate: 557908
       };
     }
   } catch (error) {

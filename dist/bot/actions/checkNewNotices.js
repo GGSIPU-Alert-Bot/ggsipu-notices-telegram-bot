@@ -19,7 +19,6 @@ const apiService_1 = require("../../services/apiService");
 const storageService_1 = require("../../services/storageService");
 const logger_1 = require("../../utils/logger");
 const axios_1 = __importDefault(require("axios"));
-const stream_1 = require("stream");
 // import { sendWebhookEvent } from '../../services/whatsappWebhookService';
 function downloadPdf(url) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -95,7 +94,11 @@ function sendNoticeMessage(notice) {
         try {
             const pdfBuffer = yield downloadPdf(notice.url);
             const filename = `Notice_${notice.id}.pdf`;
-            yield index_1.bot.telegram.sendDocument(config_1.config.channelId, { source: stream_1.Readable.from(pdfBuffer), filename: filename }, {
+            const documentInput = {
+                source: pdfBuffer,
+                filename: filename
+            };
+            yield index_1.bot.telegram.sendDocument(config_1.config.channelId, documentInput, {
                 caption: caption,
                 parse_mode: 'HTML'
             });

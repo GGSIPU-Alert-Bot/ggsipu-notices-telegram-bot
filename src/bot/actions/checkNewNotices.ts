@@ -5,7 +5,7 @@ import { getLastCheckInfo, LastCheckInfo, saveLastCheckInfo } from '../../servic
 import { Notice } from '../../models/Notice';
 import { logger } from '../../utils/logger';
 import axios from 'axios';
-import { Readable } from 'stream';
+import { InputFile } from 'telegraf/typings/core/types/typegram';
 // import { sendWebhookEvent } from '../../services/whatsappWebhookService';
 
 
@@ -82,26 +82,30 @@ function isNewNotice(notice: Notice, lastCheckInfo: LastCheckInfo): boolean {
     return false;
   }
 
-async function sendNoticeMessage(notice: Notice): Promise<void> {
-  const caption = formatNoticeCaption(notice);
-  try {
-    const pdfBuffer = await downloadPdf(notice.url);
-    const filename = `Notice_${notice.id}.pdf`;
-
-    await bot.telegram.sendDocument(
-      config.channelId, 
-      { source: Readable.from(pdfBuffer), filename: filename },
-      { 
-        caption: caption,
-        parse_mode: 'HTML'
-      }
-    );
-    logger.info(`Sent notice: ${notice.id}`);
-  } catch (error) {
-    logger.error(`Error sending notice ${notice.id}:`, error);
+  async function sendNoticeMessage(notice: Notice): Promise<void> {
+    const caption = formatNoticeCaption(notice);
+    try {
+      const pdfBuffer = await downloadPdf(notice.url);
+      const filename = `Notice_${notice.id}.pdf`;
+  
+      const documentInput: InputFile = {
+        source: pdfBuffer,
+        filename: filename
+      };
+  
+      await bot.telegram.sendDocument(
+        config.channelId, 
+        documentInput,
+        { 
+          caption: caption,
+          parse_mode: 'HTML'
+        }
+      );
+      logger.info(`Sent notice: ${notice.id}`);
+    } catch (error) {
+      logger.error(`Error sending notice ${notice.id}:`, error);
+    }
   }
-}
-
 function formatNoticeCaption(notice: Notice): string {
   return `
 📢 <b>New Notice</b>
