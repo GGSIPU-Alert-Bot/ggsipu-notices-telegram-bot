@@ -20,6 +20,7 @@ const storageService_1 = require("../../services/storageService");
 const logger_1 = require("../../utils/logger");
 const axios_1 = __importDefault(require("axios"));
 const ts_retry_promise_1 = require("ts-retry-promise");
+const telegraf_1 = require("telegraf");
 // Custom sleep function
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // Set global axios timeout
@@ -108,16 +109,28 @@ function sendNoticeMessage(notice) {
                 filename: filename
             };
             yield (0, ts_retry_promise_1.retry)(() => __awaiter(this, void 0, void 0, function* () {
-                yield index_1.bot.telegram.sendDocument(config_1.config.channelId, documentInput, {
-                    caption: caption,
-                    parse_mode: 'HTML'
-                });
+                var _a, _b;
+                try {
+                    yield index_1.bot.telegram.sendDocument(config_1.config.channelId, documentInput, {
+                        caption: caption,
+                        parse_mode: 'HTML'
+                    });
+                }
+                catch (error) {
+                    if (error instanceof telegraf_1.TelegramError && ((_a = error.response) === null || _a === void 0 ? void 0 : _a.error_code) === 429) {
+                        const retryAfter = ((_b = error.response.parameters) === null || _b === void 0 ? void 0 : _b.retry_after) || 1;
+                        logger_1.logger.warn(`Rate limit hit. Waiting for ${retryAfter} seconds before retrying.`);
+                        yield sleep(retryAfter * 1000);
+                        throw error; // Rethrow to trigger retry
+                    }
+                    throw error;
+                }
             }), { retries: 3, delay: 1000 });
             logger_1.logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
         }
         catch (error) {
             logger_1.logger.error(`Error sending notice ${notice.id}. Time taken: ${Date.now() - start}ms:`, error);
-            throw error; // Re-throw the error to be caught in the main loop
+            throw error;
         }
     });
 }

@@ -7,6 +7,8 @@ import { logger } from '../../utils/logger';
 import axios from 'axios';
 import { InputFile } from 'telegraf/typings/core/types/typegram';
 import { retry } from 'ts-retry-promise';
+import { TelegramError } from 'telegraf';
+
 
 // Custom sleep function
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -104,20 +106,30 @@ async function sendNoticeMessage(notice: Notice): Promise<void> {
     };
 
     await retry(async () => {
-      await bot.telegram.sendDocument(
-        config.channelId, 
-        documentInput,
-        { 
-          caption: caption,
-          parse_mode: 'HTML'
+      try {
+        await bot.telegram.sendDocument(
+          config.channelId, 
+          documentInput,
+          { 
+            caption: caption,
+            parse_mode: 'HTML'
+          }
+        );
+      } catch (error) {
+        if (error instanceof TelegramError && error.response?.error_code === 429) {
+          const retryAfter = error.response.parameters?.retry_after || 1;
+          logger.warn(`Rate limit hit. Waiting for ${retryAfter} seconds before retrying.`);
+          await sleep(retryAfter * 1000);
+          throw error; // Rethrow to trigger retry
         }
-      );
+        throw error;
+      }
     }, { retries: 3, delay: 1000 });
 
     logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
   } catch (error) {
     logger.error(`Error sending notice ${notice.id}. Time taken: ${Date.now() - start}ms:`, error);
-    throw error; // Re-throw the error to be caught in the main loop
+    throw error;
   }
 }
 
