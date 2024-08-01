@@ -15,14 +15,14 @@ app.get('/status', (req: any, res: { json: (arg0: { message: string; }) => void;
 });
 
 // Setting up the cron job
-// const job = new CronJob('10 8,10,12,14,16,17,18,19,20,22 * * *', async () => {
-//   try {
-//     logger.info('Cron job triggered: Checking for new notices');
-//     await checkForNewNotices();
-//   } catch (error) {
-//     logger.error('Error in cron job:', error);
-//   }
-// });
+const job = new CronJob('10 8,10,12,14,16,17,18,19,20,22 * * *', async () => {
+  try {
+    logger.info('Cron job triggered: Checking for new notices');
+    await checkForNewNotices();
+  } catch (error) {
+    logger.error('Error in cron job:', error);
+  }
+});
 
 async function startBot() {
   try {
@@ -40,32 +40,32 @@ async function startBot() {
 startBot();
 
 // Immediately check for new notices
-async function runCheckForNewNotices() {
-  try {
-    logger.info('Running immediate check for new notices');
-    await checkForNewNotices();
-  } catch (error) {
-    logger.error('Error in immediate check for new notices:', error);
-  }
-}
+// async function runCheckForNewNotices() {
+//   try {
+//     logger.info('Running immediate check for new notices');
+//     await checkForNewNotices();
+//   } catch (error) {
+//     logger.error('Error in immediate check for new notices:', error);
+//   }
+// }
 
-runCheckForNewNotices();
+// runCheckForNewNotices();
 
-// job.start();
+job.start();
 
 logger.info('Application initialized');
 
 // Graceful shutdown
 process.once('SIGINT', () => {
   bot.stop('SIGINT');
-  // job.stop();
+  job.stop();
   logger.info('Application stopped due to SIGINT');
   process.exit(0);
 });
 
 process.once('SIGTERM', () => {
   bot.stop('SIGTERM');
-  // job.stop();
+  job.stop();
   logger.info('Application stopped due to SIGTERM');
   process.exit(0);
 });
