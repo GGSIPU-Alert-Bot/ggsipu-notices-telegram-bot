@@ -23,7 +23,7 @@ async function downloadPdfWithRetry(url: string): Promise<Buffer> {
       url: url,
       responseType: 'arraybuffer',
       onDownloadProgress: (progressEvent) => {
-        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total!);
+        const percentCompleted = Math.round((progressEvent.loaded * 100) / (progressEvent.total || progressEvent.loaded));
         logger.info(`Download progress: ${percentCompleted}%`);
       }
     });
@@ -120,46 +120,50 @@ async function sendNoticeMessage(notice: Notice): Promise<void> {
     const pdfBuffer = await downloadPdfWithRetry(notice.url);
     logger.info(`Downloaded PDF for notice ${notice.id}. Size: ${pdfBuffer.length} bytes`);
 
-    const filename = `Notice_${notice.id}.pdf`;
+    if (pdfBuffer.length > 50 * 1024 * 1024) {
+      await splitAndSendLargePdf(notice, pdfBuffer);
+    } else {
+      const filename = `Notice_${notice.id}.pdf`;
 
-    const documentInput: InputFile = {
-      source: pdfBuffer,
-      filename: filename
-    };
+      const documentInput: InputFile = {
+        source: pdfBuffer,
+        filename: filename
+      };
 
-    await backOff(async () => {
-      try {
-        logger.info(`Attempting to send notice ${notice.id} to Telegram`);
-        await bot.telegram.sendDocument(
-          config.channelId, 
-          documentInput,
-          { 
-            caption: caption,
-            parse_mode: 'HTML'
-          }
-        );
-        logger.info(`Successfully sent notice ${notice.id} to Telegram`);
-      } catch (error) {
-        if (error instanceof TelegramError) {
-          if (error.response?.error_code === 429) {
-            const retryAfter = error.response.parameters?.retry_after || 1;
-            logger.warn(`Rate limit hit for notice ${notice.id}. Retrying after ${retryAfter} seconds.`);
-            await sleep(retryAfter * 1000);
+      await backOff(async () => {
+        try {
+          logger.info(`Attempting to send notice ${notice.id} to Telegram`);
+          await bot.telegram.sendDocument(
+            config.channelId, 
+            documentInput,
+            { 
+              caption: caption,
+              parse_mode: 'HTML'
+            }
+          );
+          logger.info(`Successfully sent notice ${notice.id} to Telegram`);
+        } catch (error) {
+          if (error instanceof TelegramError) {
+            if (error.response?.error_code === 429) {
+              const retryAfter = error.response.parameters?.retry_after || 1;
+              logger.warn(`Rate limit hit for notice ${notice.id}. Retrying after ${retryAfter} seconds.`);
+              await sleep(retryAfter * 1000);
+            } else {
+              logger.error(`Telegram error for notice ${notice.id}: ${error.message}`);
+            }
           } else {
-            logger.error(`Telegram error for notice ${notice.id}: ${error.message}`);
+            logger.error(`Unexpected error for notice ${notice.id}: ${error}`);
           }
-        } else {
-          logger.error(`Unexpected error for notice ${notice.id}: ${error}`);
+          throw error; // Rethrow to trigger backoff retry
         }
-        throw error; // Rethrow to trigger backoff retry
-      }
-    }, {
-      numOfAttempts: 5,
-      startingDelay: 1000,
-      timeMultiple: 2,
-      maxDelay: 60000,
-      jitter: 'full'
-    });
+      }, {
+        numOfAttempts: 5,
+        startingDelay: 1000,
+        timeMultiple: 2,
+        maxDelay: 60000,
+        jitter: 'full'
+      });
+    }
 
     logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
   } catch (error) {
@@ -183,20 +187,15 @@ function formatNoticeCaption(notice: Notice): string {
   `.trim();
 }
 
-// Helper function to split large PDFs
 async function splitAndSendLargePdf(notice: Notice, pdfBuffer: Buffer): Promise<void> {
   const maxSize = 50 * 1024 * 1024; // 50 MB
-  if (pdfBuffer.length <= maxSize) {
-    await sendNoticeMessage(notice);
-  } else {
-    const parts = Math.ceil(pdfBuffer.length / maxSize);
-    for (let i = 0; i < parts; i++) {
-      const start = i * maxSize;
-      const end = Math.min((i + 1) * maxSize, pdfBuffer.length);
-      const partBuffer = pdfBuffer.slice(start, end);
-      const partNotice = {...notice, title: `${notice.title} (Part ${i + 1} of ${parts})`};
-      await sendNoticeMessage(partNotice);
-      await sleep(2000); // Wait between parts
-    }
+  const parts = Math.ceil(pdfBuffer.length / maxSize);
+  for (let i = 0; i < parts; i++) {
+    const start = i * maxSize;
+    const end = Math.min((i + 1) * maxSize, pdfBuffer.length);
+    const partBuffer = pdfBuffer.slice(start, end);
+    const partNotice = {...notice, title: `${notice.title} (Part ${i + 1} of ${parts})`};
+    await sendNoticeMessage({...partNotice, url: ''}); // URL is not needed for split PDFs
+    await sleep(2000); // Wait between parts
   }
 }
