@@ -6,38 +6,49 @@ import { Notice } from '../../models/Notice';
 import { logger } from '../../utils/logger';
 import axios from 'axios';
 import { InputFile } from 'telegraf/typings/core/types/typegram';
-import { retry } from 'ts-retry-promise';
+import { backOff } from "exponential-backoff";
 import { TelegramError } from 'telegraf';
-
 
 // Custom sleep function
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Set global axios timeout
-axios.defaults.timeout = 60000; // 60 seconds
+axios.defaults.timeout = 120000; // 2 minutes
 
 async function downloadPdfWithRetry(url: string): Promise<Buffer> {
-  return retry(async () => {
+  return backOff(async () => {
+    logger.info(`Attempting to download PDF from ${url}`);
     const response = await axios({
       method: 'get',
       url: url,
-      responseType: 'arraybuffer'
+      responseType: 'arraybuffer',
+      onDownloadProgress: (progressEvent) => {
+        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total!);
+        logger.info(`Download progress: ${percentCompleted}%`);
+      }
     });
     const pdfBuffer = Buffer.from(response.data, 'binary');
+    logger.info(`Downloaded PDF. Size: ${pdfBuffer.length} bytes`);
     if (pdfBuffer.length > 50 * 1024 * 1024) { // If larger than 50MB
       throw new Error('PDF too large to send directly');
     }
     return pdfBuffer;
-  }, { retries: 3, delay: 1000 });
+  }, {
+    numOfAttempts: 5,
+    startingDelay: 1000,
+    timeMultiple: 2,
+    maxDelay: 30000,
+    jitter: 'full'
+  });
 }
 
 export async function checkForNewNotices(): Promise<void> {
   try {
     logger.info('Checking for new notices');
     const lastCheckInfo = await getLastCheckInfo();
-    const notices = await getLatestNotices();
-
-    const newNotices = notices.filter(notice => isNewNotice(notice, lastCheckInfo));
+    const latestNotices = await getLatestNotices();
+    
+    const newNotices = latestNotices.filter(notice => isNewNotice(notice, lastCheckInfo));
 
     if (newNotices.length > 0) {
       logger.info(`Found ${newNotices.length} new notices`);
@@ -48,28 +59,36 @@ export async function checkForNewNotices(): Promise<void> {
         return b.id - a.id;
       });
 
+      let successfullyProcessedNotices = [];
+
       for (const notice of sortedNewNotices.reverse()) {
         try {
           await sendNoticeMessage(notice);
-          await sleep(1000); // Wait 1 second between sends for rate limiting
+          successfullyProcessedNotices.push(notice);
+          await sleep(2000); // Wait 2 seconds between sends for rate limiting
         } catch (error) {
           logger.error(`Failed to send notice ${notice.id}:`, error);
+          // Continue with the next notice
         }
       }
 
-      const latestNotice = sortedNewNotices[sortedNewNotices.length - 1];
+      if (successfullyProcessedNotices.length > 0) {
+        const latestSuccessfulNotice = successfullyProcessedNotices[successfullyProcessedNotices.length - 1];
 
-      const updatedLastCheckInfo: LastCheckInfo = {
-        lastNoticeId: latestNotice.id,
-        lastDate: latestNotice.date,
-        lastCreatedAt: new Date().toISOString(),
-        lastTitle: latestNotice.title,
-        lastUrl: latestNotice.url,
-        lastProcessedIdForDate: latestNotice.id
-      };
+        const updatedLastCheckInfo: LastCheckInfo = {
+          lastNoticeId: latestSuccessfulNotice.id,
+          lastDate: latestSuccessfulNotice.date,
+          lastCreatedAt: latestSuccessfulNotice.createdAt,
+          lastTitle: latestSuccessfulNotice.title,
+          lastUrl: latestSuccessfulNotice.url,
+          lastProcessedIdForDate: latestSuccessfulNotice.id
+        };
 
-      logger.info(`Saving last check info: ${JSON.stringify(updatedLastCheckInfo)}`);
-      await saveLastCheckInfo(updatedLastCheckInfo);
+        logger.info(`Saving last check info: ${JSON.stringify(updatedLastCheckInfo)}`);
+        await saveLastCheckInfo(updatedLastCheckInfo);
+      } else {
+        logger.warn('No notices were successfully processed');
+      }
     } else {
       logger.info('No new notices found');
     }
@@ -97,7 +116,10 @@ async function sendNoticeMessage(notice: Notice): Promise<void> {
   const caption = formatNoticeCaption(notice);
   const start = Date.now();
   try {
+    logger.info(`Downloading PDF for notice ${notice.id}. URL: ${notice.url}`);
     const pdfBuffer = await downloadPdfWithRetry(notice.url);
+    logger.info(`Downloaded PDF for notice ${notice.id}. Size: ${pdfBuffer.length} bytes`);
+
     const filename = `Notice_${notice.id}.pdf`;
 
     const documentInput: InputFile = {
@@ -105,8 +127,9 @@ async function sendNoticeMessage(notice: Notice): Promise<void> {
       filename: filename
     };
 
-    await retry(async () => {
+    await backOff(async () => {
       try {
+        logger.info(`Attempting to send notice ${notice.id} to Telegram`);
         await bot.telegram.sendDocument(
           config.channelId, 
           documentInput,
@@ -115,16 +138,28 @@ async function sendNoticeMessage(notice: Notice): Promise<void> {
             parse_mode: 'HTML'
           }
         );
+        logger.info(`Successfully sent notice ${notice.id} to Telegram`);
       } catch (error) {
-        if (error instanceof TelegramError && error.response?.error_code === 429) {
-          const retryAfter = error.response.parameters?.retry_after || 1;
-          logger.warn(`Rate limit hit. Waiting for ${retryAfter} seconds before retrying.`);
-          await sleep(retryAfter * 1000);
-          throw error; // Rethrow to trigger retry
+        if (error instanceof TelegramError) {
+          if (error.response?.error_code === 429) {
+            const retryAfter = error.response.parameters?.retry_after || 1;
+            logger.warn(`Rate limit hit for notice ${notice.id}. Retrying after ${retryAfter} seconds.`);
+            await sleep(retryAfter * 1000);
+          } else {
+            logger.error(`Telegram error for notice ${notice.id}: ${error.message}`);
+          }
+        } else {
+          logger.error(`Unexpected error for notice ${notice.id}: ${error}`);
         }
-        throw error;
+        throw error; // Rethrow to trigger backoff retry
       }
-    }, { retries: 3, delay: 1000 });
+    }, {
+      numOfAttempts: 5,
+      startingDelay: 1000,
+      timeMultiple: 2,
+      maxDelay: 60000,
+      jitter: 'full'
+    });
 
     logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
   } catch (error) {
@@ -146,4 +181,22 @@ function formatNoticeCaption(notice: Notice): string {
 
 📄 <b>Title:</b> ${notice.title}
   `.trim();
+}
+
+// Helper function to split large PDFs
+async function splitAndSendLargePdf(notice: Notice, pdfBuffer: Buffer): Promise<void> {
+  const maxSize = 50 * 1024 * 1024; // 50 MB
+  if (pdfBuffer.length <= maxSize) {
+    await sendNoticeMessage(notice);
+  } else {
+    const parts = Math.ceil(pdfBuffer.length / maxSize);
+    for (let i = 0; i < parts; i++) {
+      const start = i * maxSize;
+      const end = Math.min((i + 1) * maxSize, pdfBuffer.length);
+      const partBuffer = pdfBuffer.slice(start, end);
+      const partNotice = {...notice, title: `${notice.title} (Part ${i + 1} of ${parts})`};
+      await sendNoticeMessage(partNotice);
+      await sleep(2000); // Wait between parts
+    }
+  }
 }

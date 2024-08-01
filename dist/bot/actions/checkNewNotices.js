@@ -19,26 +19,38 @@ const apiService_1 = require("../../services/apiService");
 const storageService_1 = require("../../services/storageService");
 const logger_1 = require("../../utils/logger");
 const axios_1 = __importDefault(require("axios"));
-const ts_retry_promise_1 = require("ts-retry-promise");
+const exponential_backoff_1 = require("exponential-backoff");
 const telegraf_1 = require("telegraf");
 // Custom sleep function
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // Set global axios timeout
-axios_1.default.defaults.timeout = 60000; // 60 seconds
+axios_1.default.defaults.timeout = 120000; // 2 minutes
 function downloadPdfWithRetry(url) {
     return __awaiter(this, void 0, void 0, function* () {
-        return (0, ts_retry_promise_1.retry)(() => __awaiter(this, void 0, void 0, function* () {
+        return (0, exponential_backoff_1.backOff)(() => __awaiter(this, void 0, void 0, function* () {
+            logger_1.logger.info(`Attempting to download PDF from ${url}`);
             const response = yield (0, axios_1.default)({
                 method: 'get',
                 url: url,
-                responseType: 'arraybuffer'
+                responseType: 'arraybuffer',
+                onDownloadProgress: (progressEvent) => {
+                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    logger_1.logger.info(`Download progress: ${percentCompleted}%`);
+                }
             });
             const pdfBuffer = Buffer.from(response.data, 'binary');
+            logger_1.logger.info(`Downloaded PDF. Size: ${pdfBuffer.length} bytes`);
             if (pdfBuffer.length > 50 * 1024 * 1024) { // If larger than 50MB
                 throw new Error('PDF too large to send directly');
             }
             return pdfBuffer;
-        }), { retries: 3, delay: 1000 });
+        }), {
+            numOfAttempts: 5,
+            startingDelay: 1000,
+            timeMultiple: 2,
+            maxDelay: 30000,
+            jitter: 'full'
+        });
     });
 }
 function checkForNewNotices() {
@@ -46,8 +58,8 @@ function checkForNewNotices() {
         try {
             logger_1.logger.info('Checking for new notices');
             const lastCheckInfo = yield (0, storageService_1.getLastCheckInfo)();
-            const notices = yield (0, apiService_1.getLatestNotices)();
-            const newNotices = notices.filter(notice => isNewNotice(notice, lastCheckInfo));
+            const latestNotices = yield (0, apiService_1.getLatestNotices)();
+            const newNotices = latestNotices.filter(notice => isNewNotice(notice, lastCheckInfo));
             if (newNotices.length > 0) {
                 logger_1.logger.info(`Found ${newNotices.length} new notices`);
                 const sortedNewNotices = newNotices.sort((a, b) => {
@@ -56,26 +68,34 @@ function checkForNewNotices() {
                         return dateComparison;
                     return b.id - a.id;
                 });
+                let successfullyProcessedNotices = [];
                 for (const notice of sortedNewNotices.reverse()) {
                     try {
                         yield sendNoticeMessage(notice);
-                        yield sleep(1000); // Wait 1 second between sends for rate limiting
+                        successfullyProcessedNotices.push(notice);
+                        yield sleep(2000); // Wait 2 seconds between sends for rate limiting
                     }
                     catch (error) {
                         logger_1.logger.error(`Failed to send notice ${notice.id}:`, error);
+                        // Continue with the next notice
                     }
                 }
-                const latestNotice = sortedNewNotices[sortedNewNotices.length - 1];
-                const updatedLastCheckInfo = {
-                    lastNoticeId: latestNotice.id,
-                    lastDate: latestNotice.date,
-                    lastCreatedAt: new Date().toISOString(),
-                    lastTitle: latestNotice.title,
-                    lastUrl: latestNotice.url,
-                    lastProcessedIdForDate: latestNotice.id
-                };
-                logger_1.logger.info(`Saving last check info: ${JSON.stringify(updatedLastCheckInfo)}`);
-                yield (0, storageService_1.saveLastCheckInfo)(updatedLastCheckInfo);
+                if (successfullyProcessedNotices.length > 0) {
+                    const latestSuccessfulNotice = successfullyProcessedNotices[successfullyProcessedNotices.length - 1];
+                    const updatedLastCheckInfo = {
+                        lastNoticeId: latestSuccessfulNotice.id,
+                        lastDate: latestSuccessfulNotice.date,
+                        lastCreatedAt: latestSuccessfulNotice.createdAt,
+                        lastTitle: latestSuccessfulNotice.title,
+                        lastUrl: latestSuccessfulNotice.url,
+                        lastProcessedIdForDate: latestSuccessfulNotice.id
+                    };
+                    logger_1.logger.info(`Saving last check info: ${JSON.stringify(updatedLastCheckInfo)}`);
+                    yield (0, storageService_1.saveLastCheckInfo)(updatedLastCheckInfo);
+                }
+                else {
+                    logger_1.logger.warn('No notices were successfully processed');
+                }
             }
             else {
                 logger_1.logger.info('No new notices found');
@@ -102,30 +122,47 @@ function sendNoticeMessage(notice) {
         const caption = formatNoticeCaption(notice);
         const start = Date.now();
         try {
+            logger_1.logger.info(`Downloading PDF for notice ${notice.id}. URL: ${notice.url}`);
             const pdfBuffer = yield downloadPdfWithRetry(notice.url);
+            logger_1.logger.info(`Downloaded PDF for notice ${notice.id}. Size: ${pdfBuffer.length} bytes`);
             const filename = `Notice_${notice.id}.pdf`;
             const documentInput = {
                 source: pdfBuffer,
                 filename: filename
             };
-            yield (0, ts_retry_promise_1.retry)(() => __awaiter(this, void 0, void 0, function* () {
+            yield (0, exponential_backoff_1.backOff)(() => __awaiter(this, void 0, void 0, function* () {
                 var _a, _b;
                 try {
+                    logger_1.logger.info(`Attempting to send notice ${notice.id} to Telegram`);
                     yield index_1.bot.telegram.sendDocument(config_1.config.channelId, documentInput, {
                         caption: caption,
                         parse_mode: 'HTML'
                     });
+                    logger_1.logger.info(`Successfully sent notice ${notice.id} to Telegram`);
                 }
                 catch (error) {
-                    if (error instanceof telegraf_1.TelegramError && ((_a = error.response) === null || _a === void 0 ? void 0 : _a.error_code) === 429) {
-                        const retryAfter = ((_b = error.response.parameters) === null || _b === void 0 ? void 0 : _b.retry_after) || 1;
-                        logger_1.logger.warn(`Rate limit hit. Waiting for ${retryAfter} seconds before retrying.`);
-                        yield sleep(retryAfter * 1000);
-                        throw error; // Rethrow to trigger retry
+                    if (error instanceof telegraf_1.TelegramError) {
+                        if (((_a = error.response) === null || _a === void 0 ? void 0 : _a.error_code) === 429) {
+                            const retryAfter = ((_b = error.response.parameters) === null || _b === void 0 ? void 0 : _b.retry_after) || 1;
+                            logger_1.logger.warn(`Rate limit hit for notice ${notice.id}. Retrying after ${retryAfter} seconds.`);
+                            yield sleep(retryAfter * 1000);
+                        }
+                        else {
+                            logger_1.logger.error(`Telegram error for notice ${notice.id}: ${error.message}`);
+                        }
                     }
-                    throw error;
+                    else {
+                        logger_1.logger.error(`Unexpected error for notice ${notice.id}: ${error}`);
+                    }
+                    throw error; // Rethrow to trigger backoff retry
                 }
-            }), { retries: 3, delay: 1000 });
+            }), {
+                numOfAttempts: 5,
+                startingDelay: 1000,
+                timeMultiple: 2,
+                maxDelay: 60000,
+                jitter: 'full'
+            });
             logger_1.logger.info(`Sent notice: ${notice.id}. Time taken: ${Date.now() - start}ms`);
         }
         catch (error) {
@@ -147,4 +184,24 @@ function formatNoticeCaption(notice) {
 
 📄 <b>Title:</b> ${notice.title}
   `.trim();
+}
+// Helper function to split large PDFs
+function splitAndSendLargePdf(notice, pdfBuffer) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const maxSize = 50 * 1024 * 1024; // 50 MB
+        if (pdfBuffer.length <= maxSize) {
+            yield sendNoticeMessage(notice);
+        }
+        else {
+            const parts = Math.ceil(pdfBuffer.length / maxSize);
+            for (let i = 0; i < parts; i++) {
+                const start = i * maxSize;
+                const end = Math.min((i + 1) * maxSize, pdfBuffer.length);
+                const partBuffer = pdfBuffer.slice(start, end);
+                const partNotice = Object.assign(Object.assign({}, notice), { title: `${notice.title} (Part ${i + 1} of ${parts})` });
+                yield sendNoticeMessage(partNotice);
+                yield sleep(2000); // Wait between parts
+            }
+        }
+    });
 }
