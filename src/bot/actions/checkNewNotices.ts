@@ -8,6 +8,8 @@ import axios from 'axios';
 import { InputFile } from 'telegraf/typings/core/types/typegram';
 import { backOff } from "exponential-backoff";
 import { TelegramError } from 'telegraf';
+import { sendWebhookEvent } from '../../services/whatsappWebhookService';
+
 
 // Custom sleep function
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -64,6 +66,7 @@ export async function checkForNewNotices(): Promise<void> {
       for (const notice of sortedNewNotices.reverse()) {
         try {
           await sendNoticeMessage(notice);
+          await sendWebhookEvent(notice);
           successfullyProcessedNotices.push(notice);
           await sleep(2000); // Wait 2 seconds between sends for rate limiting
         } catch (error) {
