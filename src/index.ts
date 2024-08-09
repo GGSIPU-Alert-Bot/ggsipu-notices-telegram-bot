@@ -15,7 +15,7 @@ app.get('/status', (req: any, res: { json: (arg0: { message: string; }) => void;
 });
 
 // Setting up the cron job
-const job = new CronJob('10 8,10,12,14,16,17,18,19,20,21,22 * * *', async () => {
+const job = new CronJob('10 8,10,12,13,14,16,17,18,19,20,21 * * *', async () => {
   try {
     logger.info('Cron job triggered: Checking for new notices');
     await checkForNewNotices();
